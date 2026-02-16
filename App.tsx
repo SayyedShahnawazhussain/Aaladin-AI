@@ -89,13 +89,32 @@ const App: React.FC = () => {
         return;
       }
       
+      // Check for Media Devices support
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        addLog("CRITICAL: MEDIA DEVICES NOT SUPPORTED", "error");
+        return;
+      }
+
       const ai = new GoogleGenAI({ apiKey });
       const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+      
+      // Request microphone before initializing AI to catch permission issues early
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (mediaError: any) {
+        if (mediaError.name === 'NotAllowedError' || mediaError.name === 'PermissionDeniedError') {
+          addLog("PERMISSION DENIED: MICROPHONE ACCESS REQUIRED", "error");
+        } else {
+          addLog(`HARDWARE ERROR: ${mediaError.message || 'UNKNOWN'}`, "error");
+        }
+        return;
+      }
+
       outAudioContextRef.current = new AudioCtx({ sampleRate: 24000 });
       const outGain = outAudioContextRef.current.createGain();
       outGain.connect(outAudioContextRef.current.destination);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
@@ -169,9 +188,10 @@ const App: React.FC = () => {
         }
       });
       sessionPromiseRef.current = sessionPromise;
-    } catch (e) {
+    } catch (e: any) {
       console.error("Core ignition error:", e);
-      addLog("CORE IGNITION FAILED", "error");
+      addLog(`CORE IGNITION FAILED: ${e.message || 'PERMISSION_DENIED'}`, "error");
+      setStatus(AppStatus.ERROR);
     }
   };
 
@@ -188,6 +208,9 @@ const App: React.FC = () => {
               <span className="text-3xl font-black tracking-[0.4em] animate-pulse text-white">AWAKEN</span>
             </div>
           </button>
+          <p className="mt-8 text-[10px] opacity-40 uppercase tracking-widest text-center">
+            Note: Microhone permission required for voice-bridge initialization.
+          </p>
         </div>
       ) : (
         <main className="flex-1 grid grid-cols-1 md:grid-cols-5 gap-6 p-6 overflow-hidden relative">

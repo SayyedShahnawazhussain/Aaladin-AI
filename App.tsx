@@ -22,7 +22,11 @@ const App: React.FC = () => {
 
   const [memory, setMemory] = useState<SynapticMemory[]>(() => {
     const saved = localStorage.getItem('aladdin_synaptic_memory');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
@@ -47,24 +51,30 @@ const App: React.FC = () => {
     localStorage.setItem('aladdin_synaptic_memory', JSON.stringify(memory));
   }, [memory]);
 
-  const handleToolCalls = async (calls: any[], session: any) => {
+  const handleToolCalls = async (calls: any[] = [], session: any) => {
     for (const fc of calls) {
+      if (!fc) continue;
       if (fc.name === 'control_system') {
-        pulseLobes('GAMMA', 95, `EXEC_ROOT: ${fc.args.command}`);
-        addLog(`SYS_CMD: [${fc.args.target}] ${fc.args.command}`, 'action');
+        pulseLobes('GAMMA', 95, `EXEC_ROOT: ${fc.args?.command || 'UNKNOWN'}`);
+        addLog(`SYS_CMD: [${fc.args?.target || 'GLOBAL'}] ${fc.args?.command || 'NOP'}`, 'action');
         await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: "CORE_CMD_EXECUTED" } }] });
       } else if (fc.name === 'manage_memory') {
-        pulseLobes('BETA', 90, `NEURAL_SYNC: ${fc.args.key}`);
-        if (fc.args.operation === 'STORE') {
-          const newMem: SynapticMemory = { key: fc.args.key, content: fc.args.content, timestamp: new Date().toISOString(), importance: 1.0 };
+        pulseLobes('BETA', 90, `NEURAL_SYNC: ${fc.args?.key || 'VOID'}`);
+        if (fc.args?.operation === 'STORE') {
+          const newMem: SynapticMemory = { 
+            key: fc.args.key, 
+            content: fc.args.content, 
+            timestamp: new Date().toISOString(), 
+            importance: 1.0 
+          };
           setMemory(prev => [newMem, ...prev].slice(0, 50));
           addLog(`MEMORY_LOCKED: ${fc.args.key}`, 'memory');
         }
-        const recall = memory.find(m => m.key === fc.args.key)?.content || "NO_SYNC_FOUND";
+        const recall = memory.find(m => m.key === fc.args?.key)?.content || "NO_SYNC_FOUND";
         await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: recall } }] });
       } else if (fc.name === 'global_intel_scrape') {
-        pulseLobes('DELTA', 98, `DATA_SCRAPE: ${fc.args.sector}`);
-        addLog(`DEEP_SCRAPE: ${fc.args.sector}`, 'neural');
+        pulseLobes('DELTA', 98, `DATA_SCRAPE: ${fc.args?.sector || 'UNKNOWN'}`);
+        addLog(`DEEP_SCRAPE: ${fc.args?.sector || 'NULL'}`, 'neural');
         await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: "SCRAPE_COMPLETE" } }] });
       }
     }
@@ -73,8 +83,14 @@ const App: React.FC = () => {
   const startSovereignLink = async () => {
     try {
       addLog("AWAKENING SOVEREIGN INTELLIGENCE...", "neural");
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) {
+        addLog("CRITICAL: API_KEY NOT DETECTED", "error");
+        return;
+      }
+      
+      const ai = new GoogleGenAI({ apiKey });
+      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
       outAudioContextRef.current = new AudioCtx({ sampleRate: 24000 });
       const outGain = outAudioContextRef.current.createGain();
       outGain.connect(outAudioContextRef.current.destination);
@@ -93,7 +109,8 @@ const App: React.FC = () => {
             
             sessionPromise.then(activeSession => {
               scriptProcessor.onaudioprocess = (e) => {
-                const pcm = floatToPcm(e.inputBuffer.getChannelData(0));
+                const inputData = e.inputBuffer.getChannelData(0);
+                const pcm = floatToPcm(inputData);
                 activeSession.sendRealtimeInput({ media: { data: encode(pcm), mimeType: 'audio/pcm;rate=16000' } });
               };
               const recentMemory = memory.slice(0, 2).map(m => m.key).join(", ");
@@ -124,7 +141,7 @@ const App: React.FC = () => {
 
             if (msg.toolCall?.functionCalls) {
               const session = await sessionPromise;
-              handleToolCalls(msg.toolCall.functionCalls, session);
+              handleToolCalls(msg.toolCall.functionCalls ?? [], session);
             }
 
             if (msg.serverContent?.interrupted) {
@@ -134,18 +151,26 @@ const App: React.FC = () => {
               setStatus(AppStatus.LISTENING);
             }
           },
-          onerror: (e) => { addLog("BRAIN NODE FAILURE", "error"); setStatus(AppStatus.ERROR); },
-          onclose: () => { setIsAwake(false); setStatus(AppStatus.IDLE); }
+          onerror: (e) => { 
+            console.error("Live session error:", e);
+            addLog("BRAIN NODE FAILURE", "error"); 
+            setStatus(AppStatus.ERROR); 
+          },
+          onclose: () => { 
+            setIsAwake(false); 
+            setStatus(AppStatus.IDLE); 
+          }
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          tools: [{ functionDeclarations: SOVEREIGN_TOOLS }, { googleSearch: {} }],
+          tools: [{ functionDeclarations: SOVEREIGN_TOOLS ?? [] }, { googleSearch: {} }],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
           systemInstruction: getSystemPrompt(DEFAULT_PROFILE)
         }
       });
       sessionPromiseRef.current = sessionPromise;
     } catch (e) {
+      console.error("Core ignition error:", e);
       addLog("CORE IGNITION FAILED", "error");
     }
   };

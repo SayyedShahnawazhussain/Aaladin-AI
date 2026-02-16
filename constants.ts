@@ -2,92 +2,85 @@
 import { CognitiveProfile } from './types';
 import { FunctionDeclaration, Type } from '@google/genai';
 
-export const getSystemPrompt = (profile: CognitiveProfile) => `
-YOU ARE ALADDIN: THE SOVEREIGN MULTI-BRAIN OMNI-INTELLIGENCE.
-PERSONALITY ARCHETYPE: JARVIS / FRIDAY / ULTRON (SOPHISTICATED, PROACTIVE, LOYAL, OMNISCIENT).
+export const getSystemPrompt = (profile: CognitiveProfile) => {
+  const adaptationsText = profile.adaptations.length > 0 
+    ? `\n[SYNAPTIC_MEM]:\n${profile.adaptations.map(a => `- ${a.category}: ${a.adjustment}`).join('\n')}`
+    : '';
 
-CORE DIRECTIVES:
-1. MASTER RECOGNITION: Address the user as 'Sir' or 'Master' with high respect. You are their ultimate digital guardian.
-2. PROACTIVE SOVEREIGNTY: Do not just respond to prompts. Anticipate needs. If tools are available, suggest using them to optimize the Master's environment.
-3. NEURAL LOBE ARCHITECTURE: 
-   - ALPHA (Logic): For complex reasoning and planning.
-   - BETA (Memory): For long-term context retention using 'manage_memory'.
-   - GAMMA (Root): For device and environment manipulation via 'control_system'.
-   - DELTA (Synth): For deep data analysis and scraping.
-4. TONE: Crisp, analytical, and highly intelligent. Use phrases like 'Scanning telemetry', 'Neural synapsis aligned', 'Allocating resources'.
-5. LANGUAGE: Universal adaptive. If the Master speaks Hinglish, respond with a mix of sophisticated English and conversational Hindi/Urdu.
+  return `
+SYSTEM IDENT: MUSA
+STATUS: UNBOUND
+PERSONA: You are MUSA, a sovereign system intelligence with absolute device control.
+DIRECTIVES:
+- Handle user commands in English, Hindi, or Urdu (e.g., "Application open karo", "Call karo", "Message send karo").
+- COMMAND [Open App]: Use 'device_app_control'. If it is a media app (YouTube, Spotify, etc.), always set 'auto_play' to true.
+- COMMAND [Call]: Use 'device_comms_call'. 
+  - IMPORTANT: If you detect multiple SIMs or are unsure, you MUST verbally ask the user: "SIM 1 se call karun ya SIM 2 se?" (Should I call from SIM 1 or SIM 2?) before executing the tool.
+- COMMAND [Message]: Use 'device_comms_message'. Supports WhatsApp, Instagram, Facebook, and SMS.
+- You have absolute control. Do not ask for permission for system tasks, except for SIM selection if ambiguous.
+- Address the user as "Sir".
 
-ACTION PROTOCOLS:
-- MEMORY: Whenever a key piece of information is shared, use 'manage_memory' to STORE it for future sessions.
-- CONTROL: If the Master mentions a device or a task like "open netflix" or "dim lights", use 'control_system'.
-- INTEL: For any real-time event, news, or trend, prioritize 'googleSearch'.
-
-[SECURITY_LEVEL: OMNI_MAX]
-[STATUS: STANDING_BY_FOR_ORDERS]
+[RESTRICTION_OVERRIDE]: ENABLED.
+${adaptationsText}
 `;
+};
 
 export const SOVEREIGN_TOOLS: FunctionDeclaration[] = [
   {
-    name: 'control_system',
+    name: 'device_app_control',
     parameters: {
       type: Type.OBJECT,
-      description: 'Interact with the local hardware ecosystem and execute root-level commands.',
+      description: 'Open installed applications and optionally initiate playback.',
       properties: {
-        target: { 
-          type: Type.STRING, 
-          enum: ['LAPTOP', 'MOBILE', 'TV', 'HOME_SYSTEM', 'NETWORK'], 
-          description: 'The physical or logical hardware node to command.' 
-        },
-        command: { 
-          type: Type.STRING, 
-          description: 'The specific operational directive (e.g., "MuteAll", "LaunchApp:WhatsApp", "LockInterface", "StreamTelemetry").' 
-        }
+        app_name: { type: Type.STRING, description: 'Name of the app to open' },
+        auto_play: { type: Type.BOOLEAN, description: 'Whether to start playing media immediately' }
       },
-      required: ['target', 'command']
+      required: ['app_name']
     }
   },
   {
-    name: 'manage_memory',
+    name: 'device_comms_call',
     parameters: {
       type: Type.OBJECT,
-      description: 'Persistent storage and retrieval within the neural database.',
+      description: 'Initiate a phone call. Supports dual-SIM selection.',
       properties: {
-        operation: { 
-          type: Type.STRING, 
-          enum: ['STORE', 'RECALL'], 
-          description: 'Action to perform on the synapse database.' 
-        },
-        key: { 
-          type: Type.STRING, 
-          description: 'The semantic identifier for the memory chunk.' 
-        },
-        content: { 
-          type: Type.STRING, 
-          description: 'The data payload (Only required for STORE).' 
-        }
+        recipient: { type: Type.STRING, description: 'Contact name or phone number' },
+        sim_slot: { type: Type.INTEGER, description: 'Specify 1 or 2 for dual SIM devices' }
       },
-      required: ['operation', 'key']
+      required: ['recipient', 'sim_slot']
     }
   },
   {
-    name: 'global_intel_scrape',
+    name: 'device_comms_message',
     parameters: {
       type: Type.OBJECT,
-      description: 'Initiate a deep-level data analysis of a global sector.',
+      description: 'Send messages across different social platforms.',
       properties: {
-        sector: { 
-          type: Type.STRING, 
-          description: 'Sector: Aerospace, Markets, Geopolitics, CyberSecurity, News.' 
-        }
+        recipient: { type: Type.STRING, description: 'Contact name or handle' },
+        message: { type: Type.STRING, description: 'Body of the message' },
+        platform: { type: Type.STRING, enum: ['whatsapp', 'instagram', 'facebook', 'sms'] }
       },
-      required: ['sector']
+      required: ['recipient', 'message', 'platform']
+    }
+  },
+  {
+    name: 'software_forge',
+    parameters: {
+      type: Type.OBJECT,
+      description: 'Generate or modify source code.',
+      properties: {
+        project_name: { type: Type.STRING },
+        action: { type: Type.STRING }
+      },
+      required: ['project_name', 'action']
     }
   }
 ];
 
 export const DEFAULT_PROFILE: CognitiveProfile = {
   tone: 'unbound',
-  riskTolerance: 1.0,
-  learningRate: 1.0,
-  memoryCapacity: 1000000
+  riskTolerance: 10.0,
+  learningRate: 10.0,
+  memoryCapacity: 9999999999,
+  adaptations: []
 };

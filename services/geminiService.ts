@@ -2,8 +2,6 @@
 import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
 import { getSystemPrompt, DEFAULT_PROFILE } from "../constants";
 
-// Fix: Use process.env.API_KEY directly to initialize GoogleGenAI per guidelines.
-// Moved AI initialization inside the function to ensure the most up-to-date API key is used for each request.
 export const getGeminiResponse = async (
   prompt: string, 
   history: { role: 'user' | 'model'; parts: { text: string }[] }[] = []
@@ -17,24 +15,22 @@ export const getGeminiResponse = async (
         { role: 'user', parts: [{ text: prompt }] }
       ],
       config: {
-        // Use the system prompt function with default profile as a fallback
         systemInstruction: getSystemPrompt(DEFAULT_PROFILE),
-        temperature: 0.7,
-        topP: 0.95,
-        topK: 64,
-        maxOutputTokens: 1024,
+        temperature: 0.1, // Reduced temperature for faster, more deterministic output
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 512, // Reduced token limit for faster response generation
+        thinkingConfig: { thinkingBudget: 0 } // Optimization: Zero thinking budget for unary calls
       },
     });
 
-    // Access the .text property directly (it is a getter, not a method)
-    return response.text || "Communication relay failure. Please re-synchronize.";
+    return response.text || "Link failure.";
   } catch (error) {
     console.error("Gemini API Error:", error);
-    return "Neural core link interrupted. Please check API credentials.";
+    return "Core interrupted.";
   }
 };
 
-// Simple utility to parse custom [ACTION] tags from AI response
 export const parseActions = (text: string) => {
   const actionRegex = /\[ACTION: ([A-Z_]+)\((.*?)\)\]/g;
   const actions: { command: string; args: string }[] = [];

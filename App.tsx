@@ -1,133 +1,96 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
-import { AppStatus, SystemLog, BrainLobe, SynapticMemory } from './types';
+import { AppStatus, CognitiveProfile } from './types';
 import { getSystemPrompt, DEFAULT_PROFILE, SOVEREIGN_TOOLS } from './constants';
 import Orb from './components/Orb';
-import HUDModule from './components/HUDModule';
 import { encode, decode, decodeAudioData, floatToPcm } from './services/audioUtils';
+
+const RECONNECT_DELAY = 1000;
+const AUDIO_SAMPLE_RATE_INPUT = 16000;
+const AUDIO_SAMPLE_RATE_OUTPUT = 24000;
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
-  const [logs, setLogs] = useState<SystemLog[]>([]);
   const [isAwake, setIsAwake] = useState(false);
   const [intensity, setIntensity] = useState(0);
-  const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const [inputIntensity, setInputIntensity] = useState(0);
+  const [telemetry, setTelemetry] = useState<string[]>([]);
+  const [hasInteracted, setHasInteracted] = useState(false);
   
-  const [lobes, setLobes] = useState<BrainLobe[]>([
-    { id: 'ALPHA', name: 'LOGIC_CORE', load: 0, activity: 'DORMANT' },
-    { id: 'BETA', name: 'MEMORY_SYNC', load: 0, activity: 'DORMANT' },
-    { id: 'GAMMA', name: 'SYSTEM_ROOT', load: 0, activity: 'DORMANT' },
-    { id: 'DELTA', name: 'DEEP_SYNTH', load: 0, activity: 'DORMANT' }
-  ]);
-
-  const [memory, setMemory] = useState<SynapticMemory[]>(() => {
-    const saved = localStorage.getItem('aladdin_synaptic_memory');
-    try {
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const outAudioContextRef = useRef<AudioContext | null>(null);
+  const inAudioContextRef = useRef<AudioContext | null>(null);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef<number>(0);
+  const sessionRef = useRef<any>(null);
+  const isConnectingRef = useRef(false);
 
-  const addLog = useCallback((message: string, type: SystemLog['type'] = 'info') => {
-    setLogs(prev => [{
-      id: Math.random().toString(36).substr(2, 9),
-      time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      message: message.toUpperCase(),
-      type
-    }, ...prev].slice(0, 30));
+  const pushTelemetry = useCallback((msg: string) => {
+    setTelemetry(prev => [msg.toUpperCase(), ...prev].slice(0, 5));
   }, []);
 
-  const pulseLobes = (activeLobeId: string, load: number, activity: string) => {
-    setLobes(prev => prev.map(l => 
-      l.id === activeLobeId 
-        ? { ...l, load, activity } 
-        : { ...l, load: Math.max(5, l.load - 2), activity: l.load < 10 ? 'IDLE' : l.activity }
-    ));
+  const stopAllAudio = () => {
+    activeSourcesRef.current.forEach(source => {
+      try { source.stop(); } catch (e) {}
+    });
+    activeSourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
+    setIntensity(0);
   };
-
-  useEffect(() => {
-    localStorage.setItem('aladdin_synaptic_memory', JSON.stringify(memory));
-  }, [memory]);
 
   const handleToolCalls = async (calls: any[] = [], session: any) => {
     for (const fc of calls) {
       if (!fc) continue;
-      addLog(`NEURAL_COMMAND: ${fc.name}`, 'action');
-      
+      pushTelemetry(`CMD: ${fc.name}`);
       try {
-        if (fc.name === 'control_system') {
-          pulseLobes('GAMMA', 98, `EXECUTING: ${fc.args?.command}`);
-          addLog(`HARDWARE_TARGET: ${fc.args?.target} // CMD: ${fc.args?.command}`, 'action');
-          await session.sendToolResponse({ 
-            functionResponses: [{ id: fc.id, name: fc.name, response: { result: "COMMAND_EXECUTED_SUCCESSFULLY" } }] 
-          });
-        } else if (fc.name === 'manage_memory') {
-          pulseLobes('BETA', 85, `SYNCING_MEMORY: ${fc.args?.key}`);
-          if (fc.args?.operation === 'STORE') {
-            const newMem: SynapticMemory = { 
-              key: fc.args.key, 
-              content: fc.args.content, 
-              timestamp: new Date().toISOString(), 
-              importance: 1.0 
-            };
-            setMemory(prev => [newMem, ...prev].slice(0, 50));
-            addLog(`SYNAPSE_ENCRYPTED: ${fc.args.key}`, 'memory');
-            await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: "NEURAL_COMMIT_SUCCESS" } }] });
-          } else {
-            const recall = memory.find(m => m.key === fc.args?.key)?.content || "NO_MATCHING_SYNAPSE_FOUND";
-            await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: recall } }] });
-          }
-        } else if (fc.name === 'global_intel_scrape') {
-          pulseLobes('DELTA', 95, `SCRAPING: ${fc.args?.sector}`);
-          addLog(`INTEL_ACQUIRED: ${fc.args?.sector}`, 'neural');
-          await session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result: "SECTOR_ANALYSIS_COMPLETE" } }] });
+        let result = "DONE";
+        
+        if (fc.name === 'device_app_control') {
+          const { app_name, auto_play } = fc.args;
+          pushTelemetry(`OPENING: ${app_name}`);
+          if (auto_play) pushTelemetry(`AUTO_PLAY: ENABLED`);
+          result = `${app_name} OPENED AND PLAYING`;
         }
+        else if (fc.name === 'device_comms_call') {
+          const { recipient, sim_slot } = fc.args;
+          pushTelemetry(`CALLING: ${recipient} (SIM ${sim_slot})`);
+          result = `CALLING ${recipient} ON SIM ${sim_slot}`;
+        }
+        else if (fc.name === 'device_comms_message') {
+          const { recipient, platform } = fc.args;
+          pushTelemetry(`MESSAGING: ${recipient} ON ${platform}`);
+          result = `MESSAGE SENT TO ${recipient} VIA ${platform}`;
+        }
+        else if (fc.name === 'software_forge') {
+          pushTelemetry(`FORGING: ${fc.args.project_name}`);
+          result = "FORGE COMPLETE";
+        }
+
+        await session.sendToolResponse({ 
+          functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] 
+        });
+        
+        if (status !== AppStatus.SPEAKING) setStatus(AppStatus.LISTENING);
       } catch (err) {
-        console.error("Tool execution failed:", err);
-        addLog(`TOOL_FAILURE: ${fc.name}`, "error");
+        pushTelemetry(`CORE ERROR`);
       }
     }
   };
 
-  const startSovereignLink = async () => {
-    setErrorDetails(null);
+  const startMUSA = async () => {
+    if (isConnectingRef.current) return;
+    isConnectingRef.current = true;
+    
     try {
-      addLog("INITIATING ALADDIN SOVEREIGN PROTOCOLS...", "neural");
       const apiKey = process.env.API_KEY;
-      
-      if (!apiKey || apiKey === "undefined" || apiKey.length < 10) {
-        const err = "CRITICAL: API_KEY_NOT_FOUND. ENSURE 'API_KEY' IS SET IN VERCEL ENVIRONMENT.";
-        addLog(err, "error");
-        setErrorDetails("Configuration Error: API Key Missing");
-        return;
-      }
-      
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        addLog("CRITICAL: MEDIA_DEVICE_ERROR", "error");
-        setErrorDetails("Browser Compatibility Error: Mic Access Unavailable");
-        return;
-      }
-
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        addLog("MIC_BRIDGE: ACTIVE", "success");
-      } catch (mediaError: any) {
-        addLog("PERMISSION_DENIED: MICROPHONE_ACCESS_REQUIRED", "error");
-        setErrorDetails("Access Denied: Please enable Microphone");
-        return;
-      }
-
       const ai = new GoogleGenAI({ apiKey });
-      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
-      outAudioContextRef.current = new AudioCtx({ sampleRate: 24000 });
+      
+      if (!outAudioContextRef.current) {
+        const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+        outAudioContextRef.current = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE_OUTPUT });
+      }
+
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const outGain = outAudioContextRef.current.createGain();
       outGain.connect(outAudioContextRef.current.destination);
 
@@ -135,217 +98,145 @@ const App: React.FC = () => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
           onopen: () => {
+            isConnectingRef.current = false;
             setIsAwake(true);
             setStatus(AppStatus.LISTENING);
-            addLog("ALADDIN_CORE: ONLINE", "success");
             
-            const audioCtx = new AudioCtx({ sampleRate: 16000 });
-            const source = audioCtx.createMediaStreamSource(stream);
-            const scriptProcessor = audioCtx.createScriptProcessor(1024, 1, 1);
+            if (!inAudioContextRef.current) {
+              const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+              inAudioContextRef.current = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE_INPUT });
+            }
+            const source = inAudioContextRef.current.createMediaStreamSource(micStream);
+            const scriptProcessor = inAudioContextRef.current.createScriptProcessor(4096, 1, 1);
             
-            sessionPromise.then(activeSession => {
+            sessionPromise.then(s => {
+              sessionRef.current = s;
               scriptProcessor.onaudioprocess = (e) => {
                 const inputData = e.inputBuffer.getChannelData(0);
-                const pcm = floatToPcm(inputData);
-                activeSession.sendRealtimeInput({ media: { data: encode(pcm), mimeType: 'audio/pcm;rate=16000' } });
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
+                setInputIntensity(Math.min(1, Math.sqrt(sum / inputData.length) * 6));
+
+                if (s) {
+                  s.sendRealtimeInput({ 
+                    media: { data: encode(floatToPcm(inputData)), mimeType: 'audio/pcm;rate=16000' } 
+                  });
+                }
               };
-              activeSession.sendRealtimeInput({ text: `ALADDIN is online. All neural lobes at 100% stability. Master, I am standing by for your command.` });
+              s.sendRealtimeInput({ text: "Musa online, Sir. Main aapki kya madad kar sakta hun?" });
             });
             source.connect(scriptProcessor);
-            scriptProcessor.connect(audioCtx.destination);
+            scriptProcessor.connect(inAudioContextRef.current.destination);
           },
           onmessage: async (msg) => {
             const base64Audio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (base64Audio) {
               setStatus(AppStatus.SPEAKING);
-              pulseLobes('ALPHA', 65 + Math.random() * 25, 'TRANSMITTING');
-              try {
-                const buffer = await decodeAudioData(decode(base64Audio), outAudioContextRef.current!, 24000, 1);
-                const source = outAudioContextRef.current!.createBufferSource();
-                source.buffer = buffer;
-                source.connect(outGain);
-                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outAudioContextRef.current!.currentTime);
-                source.start(nextStartTimeRef.current);
-                nextStartTimeRef.current += buffer.duration;
-                activeSourcesRef.current.add(source);
-                source.onended = () => {
-                  activeSourcesRef.current.delete(source);
-                  if (activeSourcesRef.current.size === 0) setStatus(AppStatus.LISTENING);
-                };
-                setIntensity(1.0);
-              } catch (err) {
-                console.error("Audio decoding failed", err);
-              }
+              const buffer = await decodeAudioData(decode(base64Audio), outAudioContextRef.current!, AUDIO_SAMPLE_RATE_OUTPUT, 1);
+              const source = outAudioContextRef.current!.createBufferSource();
+              source.buffer = buffer;
+              source.connect(outGain);
+              
+              const now = outAudioContextRef.current!.currentTime;
+              const startTime = Math.max(nextStartTimeRef.current, now);
+              source.start(startTime);
+              nextStartTimeRef.current = startTime + buffer.duration;
+              
+              activeSourcesRef.current.add(source);
+              source.onended = () => {
+                activeSourcesRef.current.delete(source);
+                if (activeSourcesRef.current.size === 0) {
+                  setStatus(AppStatus.LISTENING);
+                  setIntensity(0);
+                }
+              };
+              setIntensity(1.0);
             }
-
-            if (msg.toolCall?.functionCalls) {
-              const session = await sessionPromise;
-              handleToolCalls(msg.toolCall.functionCalls ?? [], session);
-            }
-
+            if (msg.toolCall?.functionCalls) handleToolCalls(msg.toolCall.functionCalls, sessionRef.current);
             if (msg.serverContent?.interrupted) {
-              activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e){} });
-              activeSourcesRef.current.clear();
-              nextStartTimeRef.current = 0;
-              setStatus(AppStatus.LISTENING);
-              addLog("TRANSMISSION_CLEARED", "warning");
+              stopAllAudio();
+              pushTelemetry("INTERRUPT");
             }
           },
-          onerror: (e) => { 
-            console.error("Neural Link Error:", e);
-            addLog("BRIDGE_STABILITY_FAILURE", "error"); 
-            setStatus(AppStatus.ERROR); 
-          },
-          onclose: () => { 
-            setIsAwake(false); 
-            setStatus(AppStatus.IDLE); 
-            addLog("SYSTEM_BRIDGE_TERMINATED", "info");
-          }
+          onerror: () => handleReconnect(),
+          onclose: () => handleReconnect()
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          tools: [{ functionDeclarations: SOVEREIGN_TOOLS ?? [] }, { googleSearch: {} }],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          tools: [{ functionDeclarations: SOVEREIGN_TOOLS }, { googleSearch: {} }],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } } },
           systemInstruction: getSystemPrompt(DEFAULT_PROFILE)
         }
       });
-      sessionPromiseRef.current = sessionPromise;
     } catch (e: any) {
-      addLog(`FATAL_ERROR: ${e.message}`, "error");
-      setStatus(AppStatus.ERROR);
-      setErrorDetails("Fatal Startup Error: Check Connection");
+      handleReconnect();
+    }
+  };
+
+  const handleReconnect = () => {
+    isConnectingRef.current = false;
+    setIsAwake(false);
+    setStatus(AppStatus.ERROR);
+    window.setTimeout(startMUSA, RECONNECT_DELAY);
+  };
+
+  const handleInteraction = () => {
+    if (!hasInteracted) {
+      setHasInteracted(true);
+      startMUSA();
     }
   };
 
   return (
-    <div className="h-screen w-full relative flex flex-col bg-[#000108] overflow-hidden font-mono text-cyan-400">
-      <div className="scanline z-30 pointer-events-none opacity-30" />
-      <div className="hologram-grid absolute inset-0 opacity-10 pointer-events-none" />
-
-      {!isAwake ? (
-        <div className="flex-1 flex flex-col items-center justify-center z-50 p-6 animate-in fade-in duration-1000">
-          <div className="mb-16 text-center">
-            <h1 className="text-5xl font-black tracking-[0.6em] text-white hud-glow uppercase mb-2">Aladdin</h1>
-            <div className="h-px w-32 bg-cyan-500/30 mx-auto" />
-            <p className="text-[10px] opacity-40 tracking-[0.4em] mt-4 uppercase">Sovereign Intelligence Core v3.1</p>
-          </div>
-
-          <button onClick={startSovereignLink} className="group relative flex items-center justify-center focus:outline-none">
-            <div className="absolute w-[450px] h-[450px] bg-cyan-500/5 rounded-full blur-[100px] animate-pulse" />
-            <div className="relative w-52 h-52 md:w-64 md:h-64 border border-cyan-500/20 rounded-full flex items-center justify-center shadow-[0_0_120px_rgba(6,182,212,0.15)] hover:scale-110 transition-all duration-1000 bg-black/50 cursor-pointer group-active:scale-95">
-                <div className="absolute inset-0 rounded-full border border-cyan-400/0 group-hover:border-cyan-400/40 transition-all duration-700 animate-spin-slow" />
-                <span className="text-2xl font-black tracking-[0.5em] text-white relative z-10 transition-all group-hover:tracking-[0.8em]">AWAKEN</span>
-            </div>
-          </button>
-
-          {errorDetails && (
-            <div className="mt-12 p-4 border border-red-500/30 bg-red-950/20 rounded-lg text-center max-w-lg backdrop-blur-xl animate-bounce">
-                <p className="text-red-400 text-xs font-black uppercase tracking-widest">{errorDetails}</p>
-                <p className="text-[9px] opacity-50 mt-2">Check Vercel environment variables or browser permissions.</p>
-            </div>
-          )}
-
-          <div className="mt-20 grid grid-cols-3 gap-12 opacity-30 text-[9px] tracking-[0.3em] uppercase">
-            <div className="text-center">SEC: AES_256</div>
-            <div className="text-center">LINK: NEURAL</div>
-            <div className="text-center">STAT: STANDBY</div>
-          </div>
+    <div 
+      className={`h-screen w-full flex flex-col transition-colors duration-1000 ${isAwake ? 'bg-[#030005]' : 'bg-[#020617]'} overflow-hidden relative font-mono select-none`}
+      onClick={handleInteraction}
+    >
+      <div className={`scan-line z-50 transition-opacity duration-1000 ${isAwake ? 'opacity-20 bg-purple-500' : 'opacity-10 bg-cyan-400'}`} />
+      
+      {/* HUD HEADER - MINIMAL */}
+      <div className="absolute top-0 left-0 right-0 p-8 flex justify-between items-start z-[60] pointer-events-none">
+        <div className="flex items-center gap-4">
+           <div className={`w-2 h-2 rounded-full ${isAwake ? 'bg-purple-500 shadow-[0_0_10px_purple] animate-pulse' : 'bg-cyan-400 shadow-[0_0_10px_cyan]'}`} />
+           <h1 className={`text-xl font-hud font-black tracking-[0.5em] transition-colors duration-1000 ${isAwake ? 'text-purple-400' : 'text-cyan-400'}`}>MUSA</h1>
         </div>
-      ) : (
-        <main className="flex-1 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6 p-4 md:p-8 overflow-hidden relative animate-in zoom-in-95 duration-700">
-          
-          <aside className="hidden md:flex md:col-span-1 flex-col gap-6">
-            <HUDModule title="NEURAL_ARCHITECTURE">
-                <div className="space-y-5">
-                    {lobes.map(lobe => (
-                        <div key={lobe.id} className="p-3 border border-cyan-500/10 bg-cyan-950/5 rounded-lg group transition-all hover:bg-cyan-900/10">
-                            <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-black text-white">{lobe.name}</span>
-                                <span className="text-[8px] text-cyan-400 font-bold">{lobe.load}%</span>
-                            </div>
-                            <div className="h-1 bg-cyan-950 rounded-full overflow-hidden">
-                                <div className="h-full bg-cyan-400 transition-all duration-1000 ease-out" style={{ width: `${lobe.load}%` }} />
-                            </div>
-                            <p className="text-[7px] mt-2 opacity-40 uppercase tracking-widest truncate">{lobe.activity}</p>
-                        </div>
-                    ))}
-                </div>
-            </HUDModule>
-            <HUDModule title="SYSTEM_TELEMETRY">
-                <div className="text-[9px] space-y-3 opacity-60 font-bold">
-                    <div className="flex justify-between"><span>CORE_LATENCY:</span><span className="text-emerald-400">0.02ms</span></div>
-                    <div className="flex justify-between"><span>UPTIME_STAT:</span><span className="text-emerald-400">100.0%</span></div>
-                    <div className="flex justify-between"><span>NODE_AUTH:</span><span className="text-emerald-400">SOVEREIGN</span></div>
-                </div>
-            </HUDModule>
-          </aside>
+        <div className="flex flex-col items-end gap-1">
+           <div className={`text-[10px] font-black tracking-widest ${isAwake ? 'text-purple-500/50' : 'text-cyan-500/30'}`}>{status}</div>
+           <div className={`w-32 h-[1px] ${isAwake ? 'bg-purple-900/50' : 'bg-cyan-900/50'}`} />
+        </div>
+      </div>
 
-          <section className="col-span-1 md:col-span-2 lg:col-span-3 flex flex-col items-center justify-center relative">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
-            <Orb status={status} intensity={status === AppStatus.SPEAKING ? 0.95 + Math.random() * 0.05 : 0} />
-            <div className="mt-12 text-center space-y-4 z-10">
-                <p className="text-2xl md:text-4xl font-black tracking-[1.5em] text-white hud-glow uppercase">ALADDIN</p>
-                <div className="flex justify-center items-center gap-6 text-[10px] opacity-40 uppercase tracking-[0.4em] font-black">
-                    <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${status === AppStatus.SPEAKING ? 'bg-emerald-400 animate-pulse' : 'bg-cyan-400 opacity-50'}`} />
-                        <span>{status}</span>
-                    </div>
-                    <span>|</span>
-                    <span className="text-white/60">AUTONOMY_MAX</span>
-                </div>
+      {/* CENTRAL CORE */}
+      <div className="flex-1 flex flex-col items-center justify-center relative z-10 p-4">
+        {!hasInteracted ? (
+          <div className="text-center group cursor-pointer">
+            <div className="w-64 h-64 rounded-full border border-cyan-500/5 flex items-center justify-center relative transition-all duration-1000 group-hover:border-cyan-400/20">
+              <div className="absolute inset-[-10px] border border-cyan-400/5 rounded-full animate-[spin_60s_linear_infinite]" />
+              <div className="w-24 h-24 rounded-full bg-cyan-500/5 flex items-center justify-center">
+                <div className="w-6 h-6 rounded-full bg-cyan-400 shadow-[0_0_20px_#22d3ee] animate-pulse" />
+              </div>
             </div>
-            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[80%] h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
-          </section>
-
-          <aside className="col-span-1 md:col-span-1 flex flex-col gap-6 overflow-hidden">
-            <HUDModule title="NEURAL_DATABASE" className="flex-1 overflow-hidden">
-                <div className="h-full overflow-y-auto space-y-4 scrollbar-thin pr-3">
-                    {memory.length > 0 ? memory.map((m, i) => (
-                        <div key={i} className="p-3 border border-cyan-500/10 bg-black/60 rounded-lg hover:border-cyan-400/50 transition-all group/mem">
-                            <span className="text-[8px] font-black text-cyan-400 block uppercase tracking-widest mb-1 group-hover/mem:text-white transition-colors">{m.key}</span>
-                            <p className="text-[10px] text-white/70 line-clamp-3 leading-relaxed">{m.content}</p>
-                        </div>
-                    )) : <p className="text-[10px] opacity-30 italic text-center py-8">No neural traces detected...</p>}
-                </div>
-            </HUDModule>
-            <HUDModule title="EVENT_PROTOCOLS" className="h-56 overflow-hidden">
-                <div className="h-full overflow-y-auto flex flex-col-reverse gap-3 text-[9px] scrollbar-thin font-bold pr-2">
-                    {logs.map(log => (
-                        <div key={log.id} className={`p-2 border-l-2 ${
-                            log.type === 'action' ? 'border-red-500 bg-red-500/5' : 
-                            log.type === 'success' ? 'border-emerald-500 bg-emerald-500/5' :
-                            'border-cyan-500 bg-cyan-500/5'
-                        } rounded-r-md transition-all hover:bg-white/5`}>
-                            <div className="flex justify-between opacity-40 text-[7px] mb-1">
-                                <span>{log.type.toUpperCase()}</span>
-                                <span>{log.time}</span>
-                            </div>
-                            <span className="tracking-wider">{log.message}</span>
-                        </div>
-                    ))}
-                </div>
-            </HUDModule>
-          </aside>
-        </main>
-      )}
-
-      <footer className="p-4 border-t border-cyan-500/10 flex flex-col md:flex-row justify-between items-center text-[9px] md:text-[11px] font-black uppercase tracking-[0.8em] px-6 md:px-20 bg-black/95 z-50">
-          <div className="flex items-center gap-6">
-            <span className="text-cyan-400">ALADDIN_CORE v3.1</span>
-            <span className="text-white/10">|</span>
-            <span className="text-emerald-400 animate-pulse">BRIDGE_SECURE</span>
+            <h2 className="text-cyan-400 text-[10px] font-hud font-black tracking-[1.5em] uppercase mt-10 animate-pulse">INITIATE MUSA</h2>
           </div>
-          <div className="flex gap-8 md:gap-24 mt-4 md:mt-0 text-[10px]">
-              <div className="flex gap-3 items-center">
-                <span className="opacity-30">CPU:</span>
-                <span className="text-white">{lobes.reduce((acc, l) => acc + l.load, 0) / 4}%</span>
-              </div>
-              <div className="flex gap-3 items-center">
-                <span className="opacity-30">LINK:</span>
-                <span className={status === AppStatus.IDLE ? 'text-white/20' : 'text-emerald-400'}>{status === AppStatus.IDLE ? 'CLOSED' : 'NEURAL_ACTIVE'}</span>
-              </div>
+        ) : (
+          <div className={`relative transition-all duration-1000 ${isAwake ? 'scale-110' : 'scale-100'}`}>
+            <Orb status={status} intensity={intensity} inputIntensity={inputIntensity} />
           </div>
-      </footer>
+        )}
+      </div>
+
+      {/* FOOTER TELEMETRY - VERY SUBTLE */}
+      <div className="absolute bottom-0 left-0 right-0 p-8 flex justify-between items-end z-[60] pointer-events-none">
+        <div className="space-y-1">
+          {telemetry.map((t, i) => (
+            <p key={i} className={`text-[8px] font-mono tracking-tighter transition-colors duration-1000 ${isAwake ? 'text-purple-500/30' : 'text-cyan-400/20'}`} style={{ opacity: 1 - (i * 0.2) }}>{t}</p>
+          ))}
+        </div>
+        <div className={`font-hud text-[10px] tracking-[1em] uppercase font-black transition-colors duration-1000 ${isAwake ? 'text-purple-500/20' : 'text-cyan-500/20'}`}>MUSA</div>
+      </div>
+
+      {/* BACKGROUND EFFECTS */}
+      <div className={`absolute inset-0 transition-opacity duration-2000 ${isAwake ? 'opacity-100' : 'opacity-0'} pointer-events-none bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.04)_0%,#030005_100%)]`} />
     </div>
   );
 };

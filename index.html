@@ -3,60 +3,69 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#000105">
-  <title>ALADDIN SOVEREIGN v3</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#020617">
+  <title>Musa</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --primary-cyan: #22d3ee;
+      --deep-navy: #020617;
+      --panel-bg: rgba(6, 18, 30, 0.7);
+    }
+
     body {
       margin: 0;
       padding: 0;
-      background: #000108;
-      color: #06b6d4;
-      font-family: 'Share Tech Mono', monospace;
+      background: var(--deep-navy);
+      background-image: 
+        linear-gradient(rgba(34, 211, 238, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(34, 211, 238, 0.02) 1px, transparent 1px);
+      background-size: 40px 40px;
+      color: #f1f5f9;
+      font-family: 'JetBrains Mono', monospace;
       overflow: hidden;
       -webkit-tap-highlight-color: transparent;
     }
-    .hud-glow {
-      text-shadow: 0 0 15px rgba(6, 182, 212, 0.6);
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                  linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+      background-size: 100% 3px, 3px 100%;
+      pointer-events: none;
+      z-index: 100;
+      opacity: 0.3;
     }
-    .hologram-grid {
-      background-image: 
-        linear-gradient(rgba(6, 182, 212, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(6, 182, 212, 0.03) 1px, transparent 1px);
-      background-size: 40px 40px;
+    
+    .glass-panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(34, 211, 238, 0.1);
+      box-shadow: inset 0 0 20px rgba(34, 211, 238, 0.05);
     }
-    @keyframes pulse-ring {
-      0% { transform: scale(0.98); opacity: 0.8; }
-      50% { transform: scale(1.02); opacity: 0.4; }
-      100% { transform: scale(0.98); opacity: 0.8; }
-    }
-    .pulse-animation {
-      animation: pulse-ring 4s infinite ease-in-out;
-    }
-    .scanline {
-      width: 100%;
-      height: 6px;
-      background: linear-gradient(to bottom, transparent, rgba(6, 182, 212, 0.05), transparent);
+
+    @keyframes rotate-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+    @keyframes scanline { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }
+    @keyframes pulse-cyan { 0%, 100% { opacity: 0.8; } 50% { opacity: 0.4; } }
+
+    .animate-rotate-ccw { animation: rotate-ccw 25s linear infinite; }
+    .scan-line {
       position: absolute;
-      top: 0;
-      left: 0;
-      animation: scan 10s linear infinite;
+      width: 100%;
+      height: 2px;
+      background: rgba(34, 211, 238, 0.1);
+      animation: scanline 8s linear infinite;
     }
-    @keyframes scan {
-      0% { transform: translateY(-100%); }
-      100% { transform: translateY(100vh); }
-    }
-    ::-webkit-scrollbar {
-      width: 2px;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: rgba(6, 182, 212, 0.2);
-    }
-    * {
-      user-select: none;
-    }
+
+    .font-hud { font-family: 'Orbitron', sans-serif; }
+
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(34, 211, 238, 0.2); border-radius: 10px; }
   </style>
 <script type="importmap">
 {
@@ -73,5 +82,6 @@
 </head>
 <body>
   <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
 </body>
 </html>

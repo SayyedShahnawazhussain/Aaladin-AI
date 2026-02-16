@@ -31,7 +31,7 @@ export async function decodeAudioData(
   for (let channel = 0; channel < numChannels; channel++) {
     const channelData = buffer.getChannelData(channel);
     for (let i = 0; i < frameCount; i++) {
-      // Direct division for high precision mapping from 16-bit PCM to float32
+      // Decode 16-bit PCM back to float32
       channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
     }
   }
@@ -42,13 +42,8 @@ export function floatToPcm(data: Float32Array): Uint8Array {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    // Clamping to avoid audio clipping distortion
-    let s = data[i];
-    if (s > 1) s = 1;
-    else if (s < -1) s = -1;
-    
-    // Improved PCM conversion scaling
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    // Scaling float32 samples to 16-bit PCM as per guidelines
+    int16[i] = data[i] * 32768;
   }
   return new Uint8Array(int16.buffer);
 }

@@ -4,6 +4,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { AppStatus } from './types';
 import { getSystemPrompt, DEFAULT_PROFILE, SOVEREIGN_TOOLS } from './constants';
 import Orb from './components/Orb';
+import HUDModule from './components/HUDModule';
 import { encode, decode, decodeAudioData, floatToPcm } from './services/audioUtils';
 
 const RECONNECT_DELAY = 3000;
@@ -18,6 +19,7 @@ const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<string[]>([]);
   const [hasInteracted, setHasInteracted] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [needsKey, setNeedsKey] = useState(false);
   
   const outAudioContextRef = useRef<AudioContext | null>(null);
   const inAudioContextRef = useRef<AudioContext | null>(null);
@@ -27,7 +29,7 @@ const App: React.FC = () => {
   const isConnectingRef = useRef(false);
 
   const pushTelemetry = useCallback((msg: string) => {
-    setTelemetry(prev => [msg.toUpperCase(), ...prev].slice(0, 5));
+    setTelemetry(prev => [msg.toUpperCase(), ...prev].slice(0, 8));
   }, []);
 
   const stopAllAudio = () => {
@@ -39,50 +41,77 @@ const App: React.FC = () => {
     setIntensity(0);
   };
 
-  const handleToolCalls = async (calls: any[] = [], session: any) => {
+  const handleToolCalls = async (calls: any[] = [], sessionPromise: Promise<any>) => {
     for (const fc of calls) {
       if (!fc) continue;
-      pushTelemetry(`CMD: ${fc.name}`);
+      pushTelemetry(`EX_CMD: ${fc.name}`);
       try {
         let result: any = { status: "SUCCESS" };
-        if (fc.name === 'device_app_control') result.detail = `${fc.args.app_name} LAUNCHED`;
+        if (fc.name === 'device_app_control') result.detail = `${fc.args.app_name} INTERFACE ACTIVE`;
         else if (fc.name === 'device_comms_call') {
-          if (!fc.args.sim_slot) result = { status: "ERROR", message: "SIM_SLOT_REQUIRED" };
-          else result.detail = `DIALING ${fc.args.recipient}`;
+          if (!fc.args.sim_slot) result = { status: "AWAITING_SIM_SELECTION", message: "SIM_SLOT_REQUIRED" };
+          else result.detail = `UPLINK TO ${fc.args.recipient} VIA SIM ${fc.args.sim_slot}`;
         }
-        else if (fc.name === 'device_comms_message') result.detail = "MESSAGE_SENT";
+        else if (fc.name === 'device_comms_message') result.detail = `PACKET TRANSMITTED TO ${fc.args.recipient}`;
 
-        await session.sendToolResponse({ 
-          functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] 
+        // Send response back to model using the resolved session
+        const session = await sessionPromise;
+        session.sendToolResponse({ 
+          functionResponses: { 
+            id: fc.id, 
+            name: fc.name, 
+            response: { result } 
+          } 
         });
+        
         if (status !== AppStatus.SPEAKING) setStatus(AppStatus.LISTENING);
       } catch (err) {
-        pushTelemetry(`CORE ERROR`);
+        pushTelemetry(`IO_FAILURE`);
+      }
+    }
+  };
+
+  const handleKeySetup = async () => {
+    if (typeof window !== 'undefined' && (window as any).aistudio) {
+      try {
+        await (window as any).aistudio.openSelectKey();
+        setNeedsKey(false);
+        // Procedurally proceed as per guidelines
+        startMUSA();
+      } catch (e) {
+        pushTelemetry("KEY_SELECT_CANCELLED");
       }
     }
   };
 
   const startMUSA = async () => {
     if (isConnectingRef.current) return;
+    
+    // Check if we have an API key available
+    const hasKey = process.env.API_KEY && process.env.API_KEY !== "undefined" && process.env.API_KEY !== "";
+    const isAiStudioKey = typeof window !== 'undefined' && (window as any).aistudio && await (window as any).aistudio.hasSelectedApiKey();
+    
+    if (!hasKey && !isAiStudioKey) {
+      setNeedsKey(true);
+      return;
+    }
+
     isConnectingRef.current = true;
     setErrorMsg(null);
     setStatus(AppStatus.THINKING);
-    pushTelemetry("UPLINK START");
+    pushTelemetry("UPLINK SECURED");
     
     try {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey || apiKey === "undefined") {
-        setErrorMsg("API_KEY_MISSING: Sir, please set your Gemini API Key in Vercel settings.");
-        setStatus(AppStatus.ERROR);
-        return;
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
+      // Re-initialize for every connection to ensure fresh key from dialog
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
+      // Initialize Audio Pipeline
       if (!outAudioContextRef.current) {
         outAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE_OUTPUT });
       }
-      if (outAudioContextRef.current.state === 'suspended') await outAudioContextRef.current.resume();
+      if (outAudioContextRef.current.state === 'suspended') {
+        await outAudioContextRef.current.resume();
+      }
 
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const outGain = outAudioContextRef.current.createGain();
@@ -95,7 +124,7 @@ const App: React.FC = () => {
             isConnectingRef.current = false;
             setIsAwake(true);
             setStatus(AppStatus.LISTENING);
-            pushTelemetry("LINK STABLE");
+            pushTelemetry("MUSA ONLINE");
             
             if (!inAudioContextRef.current) {
               inAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE_INPUT });
@@ -103,84 +132,102 @@ const App: React.FC = () => {
             const source = inAudioContextRef.current.createMediaStreamSource(micStream);
             const scriptProcessor = inAudioContextRef.current.createScriptProcessor(4096, 1, 1);
             
-            sessionPromise.then(s => {
-              sessionRef.current = s;
+            sessionPromise.then(session => {
+              sessionRef.current = session;
               scriptProcessor.onaudioprocess = (e) => {
                 const inputData = e.inputBuffer.getChannelData(0);
+                // Simple RMS for orb visuals
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
-                setInputIntensity(Math.min(1, Math.sqrt(sum / inputData.length) * 8));
+                setInputIntensity(Math.min(1, Math.sqrt(sum / inputData.length) * 10));
 
-                if (s) {
-                  s.sendRealtimeInput({ 
-                    media: { data: encode(floatToPcm(inputData)), mimeType: 'audio/pcm;rate=16000' } 
-                  });
-                }
+                session.sendRealtimeInput({ 
+                  media: { data: encode(floatToPcm(inputData)), mimeType: 'audio/pcm;rate=16000' } 
+                });
               };
-              // Explicit greeting to trigger first speech response
-              s.sendRealtimeInput({ text: "Hello Musa. Confirm system link and greet the user." });
+              
+              // Initial handshake
+              session.sendRealtimeInput({ text: "Hello MUSA. Establish neural link and greet me as 'Sir'. Confirm system integrity." });
             });
+
             source.connect(scriptProcessor);
             scriptProcessor.connect(inAudioContextRef.current.destination);
           },
           onmessage: async (msg) => {
+            // Process model audio output
             const base64Audio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-            if (base64Audio) {
+            if (base64Audio && outAudioContextRef.current) {
               setStatus(AppStatus.SPEAKING);
-              const buffer = await decodeAudioData(decode(base64Audio), outAudioContextRef.current!, AUDIO_SAMPLE_RATE_OUTPUT, 1);
-              const source = outAudioContextRef.current!.createBufferSource();
-              source.buffer = buffer;
-              source.connect(outGain);
-              
-              const now = outAudioContextRef.current!.currentTime;
-              const startTime = Math.max(nextStartTimeRef.current, now);
-              source.start(startTime);
-              nextStartTimeRef.current = startTime + buffer.duration;
-              
-              activeSourcesRef.current.add(source);
-              source.onended = () => {
-                activeSourcesRef.current.delete(source);
-                if (activeSourcesRef.current.size === 0) {
-                  setStatus(AppStatus.LISTENING);
-                  setIntensity(0);
-                }
-              };
-              setIntensity(1.0);
+              try {
+                const buffer = await decodeAudioData(decode(base64Audio), outAudioContextRef.current, AUDIO_SAMPLE_RATE_OUTPUT, 1);
+                const source = outAudioContextRef.current.createBufferSource();
+                source.buffer = buffer;
+                source.connect(outGain);
+                
+                const now = outAudioContextRef.current.currentTime;
+                const startTime = Math.max(nextStartTimeRef.current, now);
+                source.start(startTime);
+                nextStartTimeRef.current = startTime + buffer.duration;
+                
+                activeSourcesRef.current.add(source);
+                source.onended = () => {
+                  activeSourcesRef.current.delete(source);
+                  if (activeSourcesRef.current.size === 0) {
+                    setStatus(AppStatus.LISTENING);
+                    setIntensity(0);
+                  }
+                };
+                setIntensity(1.0);
+              } catch (audioErr) {
+                console.error("Audio decoding failed:", audioErr);
+              }
             }
-            if (msg.toolCall?.functionCalls) handleToolCalls(msg.toolCall.functionCalls, sessionRef.current);
+
+            // Handle tools and interruptions
+            if (msg.toolCall?.functionCalls) {
+              handleToolCalls(msg.toolCall.functionCalls, sessionPromise);
+            }
+            
             if (msg.serverContent?.interrupted) {
               stopAllAudio();
-              pushTelemetry("USER_INTERRUPT");
+              pushTelemetry("V_INT: INTERRUPT");
             }
           },
           onerror: (e) => {
-            console.error(e);
+            console.error("Live Session Error:", e);
             pushTelemetry("LINK_ERROR");
             handleReconnect();
           },
-          onclose: () => {
-            pushTelemetry("LINK_CLOSED");
+          onclose: (e) => {
+            console.log("Live Session Closed", e);
+            pushTelemetry("LINK_DORMANT");
             handleReconnect();
           }
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          tools: [{ functionDeclarations: SOVEREIGN_TOOLS }, { googleSearch: {} }],
+          tools: [{ functionDeclarations: SOVEREIGN_TOOLS }], 
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } } },
           systemInstruction: getSystemPrompt(DEFAULT_PROFILE)
         }
       });
     } catch (e: any) {
-      setErrorMsg(`CORE_FAILURE: ${e.message}`);
+      console.error("MUSA Initialization Error:", e);
+      if (e.message?.includes("Network error") || e.message?.includes("Requested entity was not found")) {
+        setNeedsKey(true);
+        pushTelemetry("RE-AUTH REQUIRED");
+      } else {
+        setErrorMsg(`CORE_BREACH: ${e.message}`);
+      }
       handleReconnect();
     }
   };
 
   const handleReconnect = () => {
     isConnectingRef.current = false;
-    setIsAwake(false);
-    setStatus(AppStatus.ERROR);
-    window.setTimeout(startMUSA, RECONNECT_DELAY);
+    setTimeout(() => {
+      if (hasInteracted && !isAwake) startMUSA();
+    }, RECONNECT_DELAY);
   };
 
   const handleInteraction = () => {
@@ -192,55 +239,104 @@ const App: React.FC = () => {
 
   return (
     <div 
-      className={`h-screen w-full flex flex-col transition-colors duration-1000 ${isAwake ? 'bg-[#030005]' : 'bg-[#020617]'} overflow-hidden relative font-mono select-none`}
+      className={`h-screen w-full flex flex-col transition-all duration-1000 ${isAwake ? 'bg-[#030005]' : 'bg-[#020617]'} overflow-hidden relative font-mono select-none cursor-pointer`}
       onClick={handleInteraction}
     >
-      <div className={`scan-line z-50 transition-opacity duration-1000 ${isAwake ? 'opacity-20 bg-purple-500' : 'opacity-10 bg-cyan-400'}`} />
-      
-      <div className="absolute top-0 left-0 right-0 p-8 flex justify-between items-start z-[60] pointer-events-none">
-        <div className="flex items-center gap-4">
-           <div className={`w-2 h-2 rounded-full ${isAwake ? 'bg-purple-500 shadow-[0_0_10px_purple] animate-pulse' : (errorMsg ? 'bg-red-500' : 'bg-cyan-400 shadow-[0_0_10px_cyan]')}`} />
-           <h1 className={`text-xl font-hud font-black tracking-[0.5em] transition-colors duration-1000 ${isAwake ? 'text-purple-400' : (errorMsg ? 'text-red-500' : 'text-cyan-400')}`}>MUSA</h1>
-        </div>
-        <div className={`text-[10px] font-black tracking-widest ${isAwake ? 'text-purple-500/50' : 'text-cyan-500/30'}`}>{status}</div>
-      </div>
+      <div className="absolute inset-0 opacity-10 pointer-events-none" 
+        style={{ backgroundImage: 'radial-gradient(#22d3ee 1px, transparent 0)', backgroundSize: '40px 40px' }} 
+      />
 
-      <div className="flex-1 flex flex-col items-center justify-center relative z-10 p-4">
+      <header className="p-6 flex justify-between items-center z-20 border-b border-white/5 bg-black/20 backdrop-blur-md">
+        <div className="flex flex-col">
+          <h1 className="text-cyan-500 font-hud text-xl tracking-tighter">MUSA <span className="text-[10px] opacity-50 ml-2">CORE_V7.0</span></h1>
+          <div className="flex gap-4 mt-1">
+             <div className="text-[8px] text-cyan-500/50 uppercase tracking-[0.2em]">Neural Uplink Active</div>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-6">
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-[10px] text-cyan-400 font-hud uppercase">Link Stability</span>
+            <span className={`text-[10px] font-hud uppercase ${isAwake ? 'text-green-500' : 'text-yellow-500'}`}>
+              {isAwake ? 'Synchronized' : 'Searching...'}
+            </span>
+          </div>
+          {needsKey && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); handleKeySetup(); }}
+              className="px-4 py-2 bg-purple-600/20 border border-purple-500 text-purple-400 text-[10px] font-hud hover:bg-purple-600/40 transition-all uppercase tracking-widest animate-pulse"
+            >
+              Verify Auth Key
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         {errorMsg && (
-          <div className="mb-8 p-4 glass-panel border-red-500/30 text-red-400 text-[10px] text-center max-w-xs animate-pulse">
+          <div className="absolute top-10 z-30 px-6 py-2 bg-red-950/60 border border-red-500/50 text-red-400 text-[10px] font-hud">
             {errorMsg}
           </div>
         )}
 
-        {!hasInteracted ? (
-          <div className="text-center group cursor-pointer">
-            <div className="w-64 h-64 rounded-full border border-cyan-500/5 flex items-center justify-center relative transition-all duration-1000 group-hover:border-cyan-400/20">
-              <div className="absolute inset-[-10px] border border-cyan-400/5 rounded-full animate-[spin_60s_linear_infinite]" />
-              <div className="w-24 h-24 rounded-full bg-cyan-500/5 flex items-center justify-center">
-                <div className="w-6 h-6 rounded-full bg-cyan-400 shadow-[0_0_20px_#22d3ee] animate-pulse" />
-              </div>
-            </div>
-            <h2 className="text-cyan-400 text-[10px] font-hud font-black tracking-[1.5em] uppercase mt-10 animate-pulse">INITIATE MUSA</h2>
-          </div>
-        ) : (
-          <div className={`relative transition-all duration-1000 ${isAwake ? 'scale-110' : 'scale-100'}`}>
-            <Orb status={status} intensity={intensity} inputIntensity={inputIntensity} />
-          </div>
-        )}
-      </div>
-
-      <div className="absolute bottom-0 left-0 right-0 p-8 flex justify-between items-end z-[60] pointer-events-none">
-        <div className="space-y-1">
-          {telemetry.map((t, i) => (
-            <p key={i} className={`text-[8px] font-mono tracking-tighter transition-colors duration-1000 ${isAwake ? 'text-purple-500/30' : 'text-cyan-400/20'}`} style={{ opacity: 1 - (i * 0.2) }}>{t}</p>
-          ))}
+        <div className="relative z-10">
+           <Orb status={status} intensity={intensity} inputIntensity={inputIntensity} />
+           
+           {!hasInteracted && (
+             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
+               <div className="text-cyan-400 text-[12px] font-hud uppercase tracking-[0.5em] animate-pulse">
+                 Establish Link
+               </div>
+             </div>
+           )}
         </div>
-        {status === AppStatus.LISTENING && (
-           <div className="text-purple-500/40 text-[9px] animate-pulse font-hud tracking-widest">AWAITING_INPUT...</div>
-        )}
-      </div>
 
-      <div className={`absolute inset-0 transition-opacity duration-2000 ${isAwake ? 'opacity-100' : 'opacity-0'} pointer-events-none bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.04)_0%,#030005_100%)]`} />
+        {/* HUD Overlay Elements */}
+        <div className="absolute left-10 top-1/2 -translate-y-1/2 hidden xl:flex flex-col gap-4 w-64 pointer-events-none opacity-80">
+           <HUDModule title="Neural Logs">
+              {telemetry.length > 0 ? telemetry.map((t, i) => (
+                <div key={i} className={`mb-1 flex gap-2 ${i === 0 ? 'text-cyan-300' : ''}`}>
+                  <span>{t}</span>
+                </div>
+              )) : "MONITORING_READY..."}
+           </HUDModule>
+           <HUDModule title="Environment">
+              <div className="flex flex-col gap-1 text-[9px]">
+                <div className="flex justify-between"><span>THERMAL</span><span>31°C</span></div>
+                <div className="flex justify-between"><span>LATENCY</span><span>14ms</span></div>
+              </div>
+           </HUDModule>
+        </div>
+
+        <div className="absolute right-10 top-1/2 -translate-y-1/2 hidden xl:flex flex-col gap-4 w-64 pointer-events-none opacity-80">
+           <HUDModule title="System Health">
+              <div className="flex flex-col gap-2">
+                <div className="w-full h-1 bg-cyan-950 rounded-full overflow-hidden">
+                  <div className="h-full bg-cyan-500" style={{ width: isAwake ? '88%' : '5%' }} />
+                </div>
+                <div className="flex justify-between text-[8px] uppercase">
+                  <span>Logic Core</span><span>{isAwake ? 'Optimal' : 'Cold'}</span>
+                </div>
+              </div>
+           </HUDModule>
+           <HUDModule title="Diagnostics">
+              <div className="text-[8px] leading-relaxed opacity-60">
+                AARCH64_QUANTUM_01<br/>
+                KERNEL_LOCKED: YES<br/>
+                SESSION_ID: {Math.random().toString(16).slice(2, 10).toUpperCase()}
+              </div>
+           </HUDModule>
+        </div>
+      </main>
+
+      <footer className="p-6 flex justify-between items-end z-20">
+         <div className="flex flex-col gap-1">
+            <div className="text-[10px] font-hud text-cyan-500/50 uppercase tracking-[0.3em]">Quantum Encrypted</div>
+         </div>
+         <div className="text-[9px] font-hud text-cyan-500/30 uppercase">
+           MUSA // Sovereign Intelligence // Alpha Build
+         </div>
+      </footer>
     </div>
   );
 };

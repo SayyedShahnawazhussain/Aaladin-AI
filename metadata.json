@@ -1,0 +1,9 @@
+{
+  "name": "Aladdin Universal Sovereign",
+  "description": "An unbound, omniscient AI core with global knowledge, space telemetry, and device control capabilities.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}

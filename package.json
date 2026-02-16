@@ -1,8 +1,8 @@
 
 {
-  "name": "aladdin-sovereign-v3",
+  "name": "musa-core-v7",
   "private": true,
-  "version": "3.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

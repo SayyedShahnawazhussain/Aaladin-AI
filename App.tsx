@@ -43,27 +43,24 @@ const App: React.FC = () => {
       if (!fc) continue;
       pushTelemetry(`CMD: ${fc.name}`);
       try {
-        let result = "DONE";
+        let result: any = { status: "SUCCESS" };
         
         if (fc.name === 'device_app_control') {
-          const { app_name, auto_play } = fc.args;
-          pushTelemetry(`OPENING: ${app_name}`);
-          if (auto_play) pushTelemetry(`AUTO_PLAY: ENABLED`);
-          result = `${app_name} OPENED AND PLAYING`;
+          pushTelemetry(`OPENING: ${fc.args.app_name}`);
+          result.detail = `${fc.args.app_name} LAUNCHED`;
         }
         else if (fc.name === 'device_comms_call') {
-          const { recipient, sim_slot } = fc.args;
-          pushTelemetry(`CALLING: ${recipient} (SIM ${sim_slot})`);
-          result = `CALLING ${recipient} ON SIM ${sim_slot}`;
+          if (!fc.args.sim_slot) {
+            pushTelemetry(`WAITING: SIM_SLOT`);
+            result = { status: "ERROR", message: "SIM_SLOT_REQUIRED. Please ask the user to choose SIM 1 or SIM 2." };
+          } else {
+            pushTelemetry(`CALLING: ${fc.args.recipient} (SIM ${fc.args.sim_slot})`);
+            result.detail = `CALLING ${fc.args.recipient}`;
+          }
         }
         else if (fc.name === 'device_comms_message') {
-          const { recipient, platform } = fc.args;
-          pushTelemetry(`MESSAGING: ${recipient} ON ${platform}`);
-          result = `MESSAGE SENT TO ${recipient} VIA ${platform}`;
-        }
-        else if (fc.name === 'software_forge') {
-          pushTelemetry(`FORGING: ${fc.args.project_name}`);
-          result = "FORGE COMPLETE";
+          pushTelemetry(`${fc.args.platform}: ${fc.args.recipient}`);
+          result.detail = "MESSAGE_SENT";
         }
 
         await session.sendToolResponse({ 
@@ -83,6 +80,8 @@ const App: React.FC = () => {
     
     try {
       const apiKey = process.env.API_KEY;
+      if (!apiKey) throw new Error("API_KEY_MISSING");
+
       const ai = new GoogleGenAI({ apiKey });
       
       if (!outAudioContextRef.current) {
@@ -123,7 +122,7 @@ const App: React.FC = () => {
                   });
                 }
               };
-              s.sendRealtimeInput({ text: "Musa online, Sir. Main aapki kya madad kar sakta hun?" });
+              s.sendRealtimeInput({ text: "Musa core active, Sir. Ready to execute." });
             });
             source.connect(scriptProcessor);
             scriptProcessor.connect(inAudioContextRef.current.destination);
@@ -194,19 +193,13 @@ const App: React.FC = () => {
     >
       <div className={`scan-line z-50 transition-opacity duration-1000 ${isAwake ? 'opacity-20 bg-purple-500' : 'opacity-10 bg-cyan-400'}`} />
       
-      {/* HUD HEADER - MINIMAL */}
       <div className="absolute top-0 left-0 right-0 p-8 flex justify-between items-start z-[60] pointer-events-none">
         <div className="flex items-center gap-4">
            <div className={`w-2 h-2 rounded-full ${isAwake ? 'bg-purple-500 shadow-[0_0_10px_purple] animate-pulse' : 'bg-cyan-400 shadow-[0_0_10px_cyan]'}`} />
            <h1 className={`text-xl font-hud font-black tracking-[0.5em] transition-colors duration-1000 ${isAwake ? 'text-purple-400' : 'text-cyan-400'}`}>MUSA</h1>
         </div>
-        <div className="flex flex-col items-end gap-1">
-           <div className={`text-[10px] font-black tracking-widest ${isAwake ? 'text-purple-500/50' : 'text-cyan-500/30'}`}>{status}</div>
-           <div className={`w-32 h-[1px] ${isAwake ? 'bg-purple-900/50' : 'bg-cyan-900/50'}`} />
-        </div>
       </div>
 
-      {/* CENTRAL CORE */}
       <div className="flex-1 flex flex-col items-center justify-center relative z-10 p-4">
         {!hasInteracted ? (
           <div className="text-center group cursor-pointer">
@@ -225,17 +218,14 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {/* FOOTER TELEMETRY - VERY SUBTLE */}
       <div className="absolute bottom-0 left-0 right-0 p-8 flex justify-between items-end z-[60] pointer-events-none">
         <div className="space-y-1">
           {telemetry.map((t, i) => (
             <p key={i} className={`text-[8px] font-mono tracking-tighter transition-colors duration-1000 ${isAwake ? 'text-purple-500/30' : 'text-cyan-400/20'}`} style={{ opacity: 1 - (i * 0.2) }}>{t}</p>
           ))}
         </div>
-        <div className={`font-hud text-[10px] tracking-[1em] uppercase font-black transition-colors duration-1000 ${isAwake ? 'text-purple-500/20' : 'text-cyan-500/20'}`}>MUSA</div>
       </div>
 
-      {/* BACKGROUND EFFECTS */}
       <div className={`absolute inset-0 transition-opacity duration-2000 ${isAwake ? 'opacity-100' : 'opacity-0'} pointer-events-none bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.04)_0%,#030005_100%)]`} />
     </div>
   );

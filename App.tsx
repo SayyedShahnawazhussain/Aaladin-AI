@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
-import { AppStatus, CognitiveProfile } from './types';
+import { AppStatus } from './types';
 import { getSystemPrompt, DEFAULT_PROFILE, SOVEREIGN_TOOLS } from './constants';
 import Orb from './components/Orb';
 import { encode, decode, decodeAudioData, floatToPcm } from './services/audioUtils';
 
-const RECONNECT_DELAY = 1000;
+const RECONNECT_DELAY = 3000;
 const AUDIO_SAMPLE_RATE_INPUT = 16000;
 const AUDIO_SAMPLE_RATE_OUTPUT = 24000;
 
@@ -17,6 +17,7 @@ const App: React.FC = () => {
   const [inputIntensity, setInputIntensity] = useState(0);
   const [telemetry, setTelemetry] = useState<string[]>([]);
   const [hasInteracted, setHasInteracted] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const outAudioContextRef = useRef<AudioContext | null>(null);
   const inAudioContextRef = useRef<AudioContext | null>(null);
@@ -44,29 +45,16 @@ const App: React.FC = () => {
       pushTelemetry(`CMD: ${fc.name}`);
       try {
         let result: any = { status: "SUCCESS" };
-        
-        if (fc.name === 'device_app_control') {
-          pushTelemetry(`OPENING: ${fc.args.app_name}`);
-          result.detail = `${fc.args.app_name} LAUNCHED`;
-        }
+        if (fc.name === 'device_app_control') result.detail = `${fc.args.app_name} LAUNCHED`;
         else if (fc.name === 'device_comms_call') {
-          if (!fc.args.sim_slot) {
-            pushTelemetry(`WAITING: SIM_SLOT`);
-            result = { status: "ERROR", message: "SIM_SLOT_REQUIRED. Please ask the user to choose SIM 1 or SIM 2." };
-          } else {
-            pushTelemetry(`CALLING: ${fc.args.recipient} (SIM ${fc.args.sim_slot})`);
-            result.detail = `CALLING ${fc.args.recipient}`;
-          }
+          if (!fc.args.sim_slot) result = { status: "ERROR", message: "SIM_SLOT_REQUIRED" };
+          else result.detail = `DIALING ${fc.args.recipient}`;
         }
-        else if (fc.name === 'device_comms_message') {
-          pushTelemetry(`${fc.args.platform}: ${fc.args.recipient}`);
-          result.detail = "MESSAGE_SENT";
-        }
+        else if (fc.name === 'device_comms_message') result.detail = "MESSAGE_SENT";
 
         await session.sendToolResponse({ 
           functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] 
         });
-        
         if (status !== AppStatus.SPEAKING) setStatus(AppStatus.LISTENING);
       } catch (err) {
         pushTelemetry(`CORE ERROR`);
@@ -77,17 +65,24 @@ const App: React.FC = () => {
   const startMUSA = async () => {
     if (isConnectingRef.current) return;
     isConnectingRef.current = true;
+    setErrorMsg(null);
+    setStatus(AppStatus.THINKING);
+    pushTelemetry("UPLINK START");
     
     try {
       const apiKey = process.env.API_KEY;
-      if (!apiKey) throw new Error("API_KEY_MISSING");
+      if (!apiKey || apiKey === "undefined") {
+        setErrorMsg("API_KEY_MISSING: Sir, please set your Gemini API Key in Vercel settings.");
+        setStatus(AppStatus.ERROR);
+        return;
+      }
 
       const ai = new GoogleGenAI({ apiKey });
       
       if (!outAudioContextRef.current) {
-        const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
-        outAudioContextRef.current = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE_OUTPUT });
+        outAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE_OUTPUT });
       }
+      if (outAudioContextRef.current.state === 'suspended') await outAudioContextRef.current.resume();
 
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const outGain = outAudioContextRef.current.createGain();
@@ -100,10 +95,10 @@ const App: React.FC = () => {
             isConnectingRef.current = false;
             setIsAwake(true);
             setStatus(AppStatus.LISTENING);
+            pushTelemetry("LINK STABLE");
             
             if (!inAudioContextRef.current) {
-              const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
-              inAudioContextRef.current = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE_INPUT });
+              inAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE_INPUT });
             }
             const source = inAudioContextRef.current.createMediaStreamSource(micStream);
             const scriptProcessor = inAudioContextRef.current.createScriptProcessor(4096, 1, 1);
@@ -114,7 +109,7 @@ const App: React.FC = () => {
                 const inputData = e.inputBuffer.getChannelData(0);
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
-                setInputIntensity(Math.min(1, Math.sqrt(sum / inputData.length) * 6));
+                setInputIntensity(Math.min(1, Math.sqrt(sum / inputData.length) * 8));
 
                 if (s) {
                   s.sendRealtimeInput({ 
@@ -122,7 +117,8 @@ const App: React.FC = () => {
                   });
                 }
               };
-              s.sendRealtimeInput({ text: "Musa core active, Sir. Ready to execute." });
+              // Explicit greeting to trigger first speech response
+              s.sendRealtimeInput({ text: "Hello Musa. Confirm system link and greet the user." });
             });
             source.connect(scriptProcessor);
             scriptProcessor.connect(inAudioContextRef.current.destination);
@@ -154,11 +150,18 @@ const App: React.FC = () => {
             if (msg.toolCall?.functionCalls) handleToolCalls(msg.toolCall.functionCalls, sessionRef.current);
             if (msg.serverContent?.interrupted) {
               stopAllAudio();
-              pushTelemetry("INTERRUPT");
+              pushTelemetry("USER_INTERRUPT");
             }
           },
-          onerror: () => handleReconnect(),
-          onclose: () => handleReconnect()
+          onerror: (e) => {
+            console.error(e);
+            pushTelemetry("LINK_ERROR");
+            handleReconnect();
+          },
+          onclose: () => {
+            pushTelemetry("LINK_CLOSED");
+            handleReconnect();
+          }
         },
         config: {
           responseModalities: [Modality.AUDIO],
@@ -168,6 +171,7 @@ const App: React.FC = () => {
         }
       });
     } catch (e: any) {
+      setErrorMsg(`CORE_FAILURE: ${e.message}`);
       handleReconnect();
     }
   };
@@ -195,12 +199,19 @@ const App: React.FC = () => {
       
       <div className="absolute top-0 left-0 right-0 p-8 flex justify-between items-start z-[60] pointer-events-none">
         <div className="flex items-center gap-4">
-           <div className={`w-2 h-2 rounded-full ${isAwake ? 'bg-purple-500 shadow-[0_0_10px_purple] animate-pulse' : 'bg-cyan-400 shadow-[0_0_10px_cyan]'}`} />
-           <h1 className={`text-xl font-hud font-black tracking-[0.5em] transition-colors duration-1000 ${isAwake ? 'text-purple-400' : 'text-cyan-400'}`}>MUSA</h1>
+           <div className={`w-2 h-2 rounded-full ${isAwake ? 'bg-purple-500 shadow-[0_0_10px_purple] animate-pulse' : (errorMsg ? 'bg-red-500' : 'bg-cyan-400 shadow-[0_0_10px_cyan]')}`} />
+           <h1 className={`text-xl font-hud font-black tracking-[0.5em] transition-colors duration-1000 ${isAwake ? 'text-purple-400' : (errorMsg ? 'text-red-500' : 'text-cyan-400')}`}>MUSA</h1>
         </div>
+        <div className={`text-[10px] font-black tracking-widest ${isAwake ? 'text-purple-500/50' : 'text-cyan-500/30'}`}>{status}</div>
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center relative z-10 p-4">
+        {errorMsg && (
+          <div className="mb-8 p-4 glass-panel border-red-500/30 text-red-400 text-[10px] text-center max-w-xs animate-pulse">
+            {errorMsg}
+          </div>
+        )}
+
         {!hasInteracted ? (
           <div className="text-center group cursor-pointer">
             <div className="w-64 h-64 rounded-full border border-cyan-500/5 flex items-center justify-center relative transition-all duration-1000 group-hover:border-cyan-400/20">
@@ -224,6 +235,9 @@ const App: React.FC = () => {
             <p key={i} className={`text-[8px] font-mono tracking-tighter transition-colors duration-1000 ${isAwake ? 'text-purple-500/30' : 'text-cyan-400/20'}`} style={{ opacity: 1 - (i * 0.2) }}>{t}</p>
           ))}
         </div>
+        {status === AppStatus.LISTENING && (
+           <div className="text-purple-500/40 text-[9px] animate-pulse font-hud tracking-widest">AWAITING_INPUT...</div>
+        )}
       </div>
 
       <div className={`absolute inset-0 transition-opacity duration-2000 ${isAwake ? 'opacity-100' : 'opacity-0'} pointer-events-none bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.04)_0%,#030005_100%)]`} />

@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#000105">
   <title>ALADDIN SOVEREIGN v3</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -11,51 +12,50 @@
     body {
       margin: 0;
       padding: 0;
-      background: #000105;
+      background: #000108;
       color: #06b6d4;
       font-family: 'Share Tech Mono', monospace;
       overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
     }
     .hud-glow {
-      text-shadow: 0 0 20px rgba(6, 182, 212, 0.5);
+      text-shadow: 0 0 15px rgba(6, 182, 212, 0.6);
     }
     .hologram-grid {
       background-image: 
-        linear-gradient(rgba(6, 182, 212, 0.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(6, 182, 212, 0.05) 1px, transparent 1px);
-      background-size: 60px 60px;
+        linear-gradient(rgba(6, 182, 212, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(6, 182, 212, 0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
     }
     @keyframes pulse-ring {
-      0% { transform: scale(0.95); opacity: 0.9; }
-      50% { transform: scale(1.05); opacity: 0.5; }
-      100% { transform: scale(0.95); opacity: 0.9; }
+      0% { transform: scale(0.98); opacity: 0.8; }
+      50% { transform: scale(1.02); opacity: 0.4; }
+      100% { transform: scale(0.98); opacity: 0.8; }
     }
     .pulse-animation {
-      animation: pulse-ring 3s infinite ease-in-out;
+      animation: pulse-ring 4s infinite ease-in-out;
     }
     .scanline {
       width: 100%;
-      height: 4px;
-      background: rgba(6, 182, 212, 0.08);
+      height: 6px;
+      background: linear-gradient(to bottom, transparent, rgba(6, 182, 212, 0.05), transparent);
       position: absolute;
       top: 0;
       left: 0;
-      animation: scan 8s linear infinite;
+      animation: scan 10s linear infinite;
     }
     @keyframes scan {
-      0% { top: -10%; }
-      100% { top: 110%; }
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100vh); }
     }
     ::-webkit-scrollbar {
-      width: 4px;
+      width: 2px;
     }
     ::-webkit-scrollbar-thumb {
-      background: rgba(6, 182, 212, 0.3);
-      border-radius: 10px;
+      background: rgba(6, 182, 212, 0.2);
     }
-    @keyframes shimmer {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(100%); }
+    * {
+      user-select: none;
     }
   </style>
 <script type="importmap">
